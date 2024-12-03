@@ -5,16 +5,19 @@ import threading
 import os
 from moviepy import AudioFileClip
 from transformers import pipeline
-import speech_recognition as sr
+import whisper
 
 
 class TranscriptionApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Video Transcription App")
-        
+        self.transcript_text = ""
         # BART modelini yükle
         self.summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
+
+        #whisper modelini yükle
+        self.whisper_model = whisper.load_model("turbo")
         
         # Dil seçimi için dropdown menü
         self.language_frame = ttk.LabelFrame(root, text="Dil Seçimi")
@@ -53,8 +56,8 @@ class TranscriptionApp:
         self.transcript_frame = ttk.LabelFrame(root, text="Konuşma Metni")
         self.transcript_frame.pack(padx=10, pady=10, fill=BOTH, expand=True)
         
-        self.transcript_text = Text(self.transcript_frame, height=10)
-        self.transcript_text.pack(padx=5, pady=5, fill=BOTH, expand=True)
+        self.transcript_text_box = Text(self.transcript_frame, height=10)
+        self.transcript_text_box.pack(padx=5, pady=5, fill=BOTH, expand=True)
         
         # Summary area
         self.summary_frame = ttk.LabelFrame(root, text="Video Özeti")
@@ -73,7 +76,6 @@ class TranscriptionApp:
         )
         if file_path:
             self.process_video(file_path)
-
     def process_video(self, video_path):
         def process():
             try:
@@ -81,29 +83,36 @@ class TranscriptionApp:
                 
                 # Extract audio from video
                 audio_clip = AudioFileClip(video_path)
-                audio_path = "temp_audio.wav"
-                audio_clip.write_audiofile(audio_path)
+                audio_path = "temp_audio.mp3"
+                try:
+                    audio_clip.write_audiofile(audio_path)
+                except Exception as e:
+                    print(f"Ses dosyası oluşturulamadı: {str(e)}")
+                    return  # Hata durumunda işlemi durdur
                 
-                # Initialize recognizer
-                recognizer = sr.Recognizer()
+                try:
+                    # Whisper ile transkripsiyon
+                    result = self.whisper_model.transcribe(audio_path)
+                except Exception as e:
+                    print(f"Whisper ses dosyasını okuyamadı: {str(e)}")
+                    return
                 
-                # Read the audio file
-                with sr.AudioFile(audio_path) as source:
-                    audio = recognizer.record(source)
+                segments = result['segments']
                 
-                # Get selected language
-                selected_language = self.language_var.get().split(" ")[0]
-                
-                # Perform speech recognition
-                text = recognizer.recognize_google(audio, language=selected_language)
-                
-                # Update transcript text
-                self.transcript_text.delete(1.0, END)
-                self.transcript_text.insert(END, text)
+                # Transkript ve zaman kodlarını ekle
+                self.transcript_text_box.delete(1.0, END)
+                timecode_transcript_content = ""
+                self.transcript_text = ""
+                for segment in segments:
+                    start_time = self.format_time(segment['start'])
+                    end_time = self.format_time(segment['end'])
+                    text = segment['text']
+                    timecode_transcript_content += text + " "
+                    self.transcript_text_box.insert(END, f"[{start_time} - {end_time}] {text}\n")
+                    self.transcript_text += text  
                 
                 # Generate summary using BART
-                transcript_content = self.transcript_text.get("1.0", END)
-                summary = self.generate_summary(transcript_content)
+                summary = self.generate_summary(self.transcript_text)
                 self.summary_text.insert(END, summary)
                 
                 # Clean up
@@ -116,6 +125,15 @@ class TranscriptionApp:
         
         thread = threading.Thread(target=process)
         thread.start()
+
+
+
+    def format_time(self, seconds):
+        """Zamanı saat:dakika:saniye,milliseconds formatına dönüştürür."""
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        milliseconds = int((seconds - int(seconds)) * 1000)
+        return f"{int(hours):02}:{int(minutes):02}:{int(seconds):02},{milliseconds:03}"
         
     def generate_summary(self, text):
         # BART has a max input length, so we chunk the text if needed

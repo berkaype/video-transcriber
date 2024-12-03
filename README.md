@@ -1,0 +1,1 @@
+Bu program videolardan ses dosyalarını alıp yazı formatına çevirir sonra da özetini çıkarır
